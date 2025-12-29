@@ -1,0 +1,67 @@
+# Google Cloud Build configuration for weather-worker
+steps:
+  # Verify source files are present (debugging step)
+  - name: 'gcr.io/cloud-builders/gcloud'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "========================================="
+        echo "Verifying source files before build..."
+        echo "========================================="
+        pwd
+        echo ""
+        echo "Directory contents:"
+        ls -la
+        echo ""
+        echo "cmd/worker contents:"
+        ls -la cmd/worker/ || echo "ERROR: cmd/worker not found!"
+        echo ""
+        echo "Checking critical files:"
+        [ -f "cmd/worker/main.go" ] && echo "✓ cmd/worker/main.go exists" || echo "✗ cmd/worker/main.go MISSING"
+        [ -f "go.mod" ] && echo "✓ go.mod exists" || echo "✗ go.mod MISSING"
+        [ -f "Dockerfile" ] && echo "✓ Dockerfile exists" || echo "✗ Dockerfile MISSING"
+        echo "========================================="
+    id: 'verify-files'
+
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'Dockerfile'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/weather-worker:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/weather-worker:latest'
+      - '.'
+    id: 'build-image'
+    waitFor: ['verify-files']
+
+  # Push the image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/weather-worker:$COMMIT_SHA'
+    id: 'push-image-sha'
+    waitFor: ['build-image']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/weather-worker:latest'
+    id: 'push-image-latest'
+    waitFor: ['build-image']
+
+# Images to be pushed to Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/weather-worker:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/weather-worker:latest'
+
+# Build timeout
+timeout: '1200s'
+
+# Options
+options:
+  machineType: 'N1_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY

@@ -1,0 +1,55 @@
+# This file specifies files that are *not* uploaded to Google Cloud
+# using gcloud. It follows the same syntax as .gitignore, with the addition of
+# "#!include" directives (which insert the entries of the given .gitignore-style
+# file at that point).
+
+# Default ignores (comment out if you want to upload these)
+.gcloudignore
+.git
+.gitignore
+
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+*.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment files
+.env
+.env.local
+.env.test
+
+# Local data
+data/
+
+# Documentation (except README)
+*.md
+!README.md
+CHANGELOG.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.backup
+
+# Test scripts
+test_*.sh
+
+# Docker files (not needed for Cloud Build)
+.dockerignore
