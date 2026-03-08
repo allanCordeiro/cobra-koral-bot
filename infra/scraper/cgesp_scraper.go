@@ -273,23 +273,38 @@ func (s *CGESPScraper) extractFloodingCount(n *html.Node) (int, error) {
 func (s *CGESPScraper) extractFloodingPoints(n *html.Node) ([]domain.FloodingPoint, error) {
 	var points []domain.FloodingPoint
 	var currentZone string
+	var currentBairro string
 
 	var traverse func(*html.Node)
 	traverse = func(node *html.Node) {
-		// Find zone headers (h3)
-		if node.Type == html.ElementNode && node.Data == "h3" {
-			zoneText := getTextContent(node)
-			if strings.Contains(zoneText, "Zona") {
-				currentZone = strings.TrimSpace(zoneText)
+		// Find zone headers (h1 with class "tit-bairros")
+		if node.Type == html.ElementNode && node.Data == "h1" {
+			if hasClass(node, "tit-bairros") {
+				zoneText := getTextContent(node)
+				if strings.Contains(zoneText, "Zona") {
+					currentZone = strings.TrimSpace(zoneText)
+				}
 			}
 		}
 
-		// Find list items (li) containing flooding info
-		if node.Type == html.ElementNode && node.Data == "li" && currentZone != "" {
-			text := getTextContent(node)
-			point := s.parseFloodingPoint(text, currentZone)
-			if point != nil {
-				points = append(points, *point)
+		// Find bairro (neighborhood) in table cells
+		if node.Type == html.ElementNode && node.Data == "td" {
+			if hasClass(node, "bairro") {
+				bairroText := getTextContent(node)
+				// Remove trailing whitespace and "pts" text
+				bairroText = strings.Split(bairroText, "\n")[0]
+				currentBairro = strings.TrimSpace(bairroText)
+			}
+		}
+
+		// Find flooding points in div with class "ponto-de-alagamento"
+		if node.Type == html.ElementNode && node.Data == "div" {
+			if hasClass(node, "ponto-de-alagamento") && currentZone != "" {
+				point := s.parseFloodingPointFromDiv(node, currentZone, currentBairro)
+				if point != nil {
+					points = append(points, *point)
+				}
+				return // Don't traverse children, we already processed them
 			}
 		}
 
@@ -302,37 +317,94 @@ func (s *CGESPScraper) extractFloodingPoints(n *html.Node) ([]domain.FloodingPoi
 	return points, nil
 }
 
-// parseFloodingPoint parses a flooding point from text
-func (s *CGESPScraper) parseFloodingPoint(text, zone string) *domain.FloodingPoint {
-	// Example text:
-	// "De 17:17 a 18:09 - R MANOEL BARBOSA
-	//  Sentido: BAIRRO/CENTRO
-	//  Referência: AV FUAD LUTFALLA"
-
-	lines := strings.Split(text, "\n")
-	if len(lines) < 3 {
-		return nil
-	}
-
-	var timeRange, location, direction, reference string
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "De ") && strings.Contains(line, " a ") {
-			parts := strings.Split(line, " - ")
-			if len(parts) >= 2 {
-				timeRange = strings.TrimSpace(parts[0])
-				location = strings.TrimSpace(parts[1])
+// hasClass checks if an HTML node has a specific class
+func hasClass(node *html.Node, className string) bool {
+	for _, attr := range node.Attr {
+		if attr.Key == "class" {
+			classes := strings.Fields(attr.Val)
+			for _, c := range classes {
+				if c == className {
+					return true
+				}
 			}
-		} else if strings.HasPrefix(line, "Sentido:") {
-			direction = strings.TrimSpace(strings.TrimPrefix(line, "Sentido:"))
-		} else if strings.HasPrefix(line, "Referência:") {
-			reference = strings.TrimSpace(strings.TrimPrefix(line, "Referência:"))
 		}
 	}
+	return false
+}
 
-	if location == "" {
+// parseFloodingPointFromDiv extracts flooding info from the new HTML structure
+func (s *CGESPScraper) parseFloodingPointFromDiv(div *html.Node, zone, bairro string) *domain.FloodingPoint {
+	var timeRange, location, direction, reference string
+	var isActive bool
+
+	var extractFromUL func(*html.Node)
+	extractFromUL = func(node *html.Node) {
+		if node.Type == html.ElementNode && node.Data == "li" {
+			// Check if this is a status indicator (active/inactive)
+			if hasClass(node, "ativo-transitavel") || hasClass(node, "ativo-intransitavel") {
+				isActive = true
+			}
+
+			// Check for location and time info (class col-local)
+			if hasClass(node, "col-local") {
+				text := getTextContent(node)
+				// Format can be:
+				// "De 14:19 a \nAV JOSE PINHEIRO BORGES"
+				// "De 14:14 a 14:32\nAV ITAQUERA"
+				// "De 14:03 a AV MORVAN DIAS DE FIGUEIREDO" (without newline)
+				lines := strings.Split(text, "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(line, "De ") {
+						// Try to extract time and location from the same line
+						// Pattern: "De HH:MM a [HH:MM ]LOCATION" or "De HH:MM a \nLOCATION"
+						timePattern := regexp.MustCompile(`^(De \d{1,2}:\d{2} a(?: \d{1,2}:\d{2})?)(.*)$`)
+						matches := timePattern.FindStringSubmatch(line)
+						if len(matches) >= 3 {
+							timeRange = strings.TrimSpace(matches[1])
+							remaining := strings.TrimSpace(matches[2])
+							if remaining != "" && location == "" {
+								location = remaining
+							}
+						} else {
+							timeRange = line
+						}
+					} else if line != "" && location == "" {
+						location = line
+					}
+				}
+			}
+
+			// Check for direction and reference info
+			if hasClass(node, "arial-descr-alag") && !hasClass(node, "col-local") {
+				text := getTextContent(node)
+				lines := strings.Split(text, "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(line, "Sentido:") {
+						direction = strings.TrimSpace(strings.TrimPrefix(line, "Sentido:"))
+					} else if strings.HasPrefix(line, "Referência:") {
+						reference = strings.TrimSpace(strings.TrimPrefix(line, "Referência:"))
+					}
+				}
+			}
+		}
+
+		for c := node.FirstChild; c != nil; c = c.NextSibling {
+			extractFromUL(c)
+		}
+	}
+	extractFromUL(div)
+
+	// Only return active flooding points
+	if !isActive || location == "" {
 		return nil
+	}
+
+	// Include bairro in zone if available
+	fullZone := zone
+	if bairro != "" {
+		fullZone = zone + " - " + bairro
 	}
 
 	return &domain.FloodingPoint{
@@ -340,7 +412,7 @@ func (s *CGESPScraper) parseFloodingPoint(text, zone string) *domain.FloodingPoi
 		TimeRange: timeRange,
 		Direction: direction,
 		Reference: reference,
-		Zone:      zone,
+		Zone:      fullZone,
 	}
 }
 
@@ -365,6 +437,10 @@ func (s *CGESPScraper) parseDateTime(dateTimeStr string) (time.Time, error) {
 func getTextContent(n *html.Node) string {
 	if n.Type == html.TextNode {
 		return n.Data
+	}
+	// Insert newline for <br> elements
+	if n.Type == html.ElementNode && n.Data == "br" {
+		return "\n"
 	}
 	var text string
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
