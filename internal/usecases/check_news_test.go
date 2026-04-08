@@ -168,6 +168,53 @@ func TestCheckNewsUseCase_StateError(t *testing.T) {
 	}
 }
 
+func TestSplitIntoSentences(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int
+	}{
+		{"sem chuva hoje. risco de enchente.", 2},
+		{"tempo firme, sem chuva", 2},
+		{"alerta; temporal esperado\nenchente possível", 3},
+		{"", 0},
+		{"única frase sem pontuação", 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := splitIntoSentences(tt.input)
+			if len(got) != tt.expected {
+				t.Errorf("splitIntoSentences(%q): expected %d sentences, got %d: %v", tt.input, tt.expected, len(got), got)
+			}
+		})
+	}
+}
+
+func TestSentenceIsNegated(t *testing.T) {
+	tests := []struct {
+		sentence string
+		expected bool
+	}{
+		{"sem chuva", true},
+		{"não há temporal", true},
+		{"chuva forte esperada", false},
+		{"semana chuvosa", false}, // "sem" não deve casar em "semana"
+		{"possibilidade descartada", true},
+		{"previsão afastada para amanhã", true},
+		{"ausência de chuva prevista", true},
+		{"risco de alagamento nas zonas baixas", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.sentence, func(t *testing.T) {
+			got := sentenceIsNegated(tt.sentence)
+			if got != tt.expected {
+				t.Errorf("sentenceIsNegated(%q): expected %v, got %v", tt.sentence, tt.expected, got)
+			}
+		})
+	}
+}
+
 func TestCheckNewsUseCase_KeywordDetection(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -185,6 +232,17 @@ func TestCheckNewsUseCase_KeywordDetection(t *testing.T) {
 		{"No keywords", "Sol durante o dia", "Tempo bom", false},
 		{"Keyword in content", "Previsão", "Risco de chuva forte", true},
 		{"Case insensitive", "ALERTA DE CHUVA", "", true},
+		// Negação — deve suprimir o disparo
+		{"Sem previsão de chuva", "Sem previsão de chuva", "", false},
+		{"Não há temporal", "Não há temporal previsto", "", false},
+		{"Tempo firme vírgula sem chuva", "Tempo firme, sem chuva", "", false},
+		{"Sem chuva no conteúdo", "Boletim", "Previsão de tempo firme, sem chuva.", false},
+		{"Ausência de chuva", "Ausência de chuva prevista", "", false},
+		// Negação parcial — deve ainda disparar
+		{"Sem chuva mas enchente", "Sem chuva hoje. Risco de enchente.", "", true},
+		{"Sem chuva no título mas temporal no conteúdo", "Sem chuva", "Previsão de temporal para amanhã.", true},
+		// Sem ≠ semana
+		{"Semana com chuva intensa", "semana com chuva intensa", "", true},
 	}
 
 	for _, tt := range tests {

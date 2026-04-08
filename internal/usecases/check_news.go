@@ -18,6 +18,29 @@ var alertKeywords = []string{
 	"inundação",
 }
 
+// Negation phrases in Portuguese that suppress a keyword match within the same sentence
+var negationPhrases = []string{
+	"sem",
+	"não há",
+	"nao ha",
+	"não existe",
+	"nao existe",
+	"não apresenta",
+	"nao apresenta",
+	"ausência de",
+	"ausencia de",
+	"descartada",
+	"descartado",
+	"improvável",
+	"improvavel",
+	"afastada",
+	"afastado",
+	"não prevista",
+	"nao prevista",
+	"não previsto",
+	"nao previsto",
+}
+
 // CheckNewsUseCase analyzes news to determine if an alert should be sent
 type CheckNewsUseCase struct {
 	newsRepo  domain.NewsRepository
@@ -79,18 +102,52 @@ func (uc *CheckNewsUseCase) Execute() (bool, *domain.News, error) {
 	return true, news, nil
 }
 
-// containsAlertKeywords checks if the news contains any alert keywords
+// containsAlertKeywords checks if the news contains any alert keywords in a non-negated context
 func (uc *CheckNewsUseCase) containsAlertKeywords(news *domain.News) bool {
-	// Normalize text to lowercase for comparison
 	titleLower := strings.ToLower(news.Title)
 	contentLower := strings.ToLower(news.Content)
 
+	allSentences := append(splitIntoSentences(titleLower), splitIntoSentences(contentLower)...)
+
 	for _, keyword := range alertKeywords {
-		if strings.Contains(titleLower, keyword) || strings.Contains(contentLower, keyword) {
-			uc.logger.Log(domain.INFO, fmt.Sprintf("Found alert keyword: %s", keyword), "CheckNewsUseCase")
-			return true
+		for _, sentence := range allSentences {
+			if strings.Contains(sentence, keyword) {
+				if !sentenceIsNegated(sentence) {
+					uc.logger.Log(domain.INFO,
+						fmt.Sprintf("Found alert keyword %q in non-negated sentence: %q", keyword, sentence),
+						"CheckNewsUseCase")
+					return true
+				}
+				uc.logger.Log(domain.INFO,
+					fmt.Sprintf("Keyword %q suppressed by negation in sentence: %q", keyword, sentence),
+					"CheckNewsUseCase")
+			}
 		}
 	}
 
+	return false
+}
+
+// splitIntoSentences splits text into sentences using common delimiters
+func splitIntoSentences(text string) []string {
+	replacer := strings.NewReplacer(".", "|", ";", "|", ",", "|", "\n", "|")
+	parts := strings.Split(replacer.Replace(text), "|")
+	var sentences []string
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			sentences = append(sentences, s)
+		}
+	}
+	return sentences
+}
+
+// sentenceIsNegated checks if a sentence contains a negation phrase
+func sentenceIsNegated(sentence string) bool {
+	padded := " " + sentence + " "
+	for _, phrase := range negationPhrases {
+		if strings.Contains(padded, " "+phrase+" ") {
+			return true
+		}
+	}
 	return false
 }
